@@ -16,7 +16,6 @@
     body {
       background: #1a6b9a;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
       min-height: 100vh;
@@ -25,10 +24,7 @@
       touch-action: none;
       user-select: none;
     }
-    canvas {
-      display: block;
-      touch-action: none;
-    }
+    canvas { display: block; touch-action: none; }
     #ui {
       position: fixed;
       top: 0; left: 0; right: 0;
@@ -51,29 +47,31 @@
       transform: translateX(-50%);
       background: rgba(0,0,0,0.6);
       color: white;
-      padding: 10px 28px;
+      padding: 10px 24px;
       border-radius: 20px;
-      font-size: 17px;
+      font-size: 16px;
       pointer-events: none;
-      transition: opacity 0.3s;
       z-index: 10;
       white-space: nowrap;
     }
     #overlay {
       position: fixed;
       inset: 0;
-      background: rgba(0,0,40,0.82);
+      background: rgba(0,0,40,0.85);
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       z-index: 20;
       color: white;
+      padding: 20px;
+      text-align: center;
     }
-    #overlay h1 { font-size: 36px; margin-bottom: 10px; }
-    #overlay .sub { font-size: 18px; color: #aef; margin-bottom: 30px; }
-    #overlay .final { font-size: 28px; color: #ffe066; margin-bottom: 8px; }
-    #overlay .rank { font-size: 20px; margin-bottom: 30px; color: #7ff; }
+    #overlay h1 { font-size: 36px; margin-bottom: 12px; }
+    #overlay .sub { font-size: 16px; color: #aef; margin-bottom: 8px; }
+    #overlay .hint { font-size: 13px; color: #ccc; margin-bottom: 6px; }
+    #overlay .final { font-size: 32px; color: #ffe066; margin: 16px 0 6px; }
+    #overlay .rank  { font-size: 20px; color: #7ff; margin-bottom: 28px; }
     button {
       background: #f4a62a;
       border: none;
@@ -84,21 +82,22 @@
       border-radius: 30px;
       cursor: pointer;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      margin-top: 16px;
     }
     button:active { transform: scale(0.96); }
-    .catch-popup {
+    .popup {
       position: fixed;
       pointer-events: none;
       z-index: 15;
-      font-size: 28px;
+      font-size: 26px;
       font-weight: bold;
       text-shadow: 0 2px 6px rgba(0,0,0,0.5);
       animation: floatUp 1.2s ease-out forwards;
     }
     @keyframes floatUp {
-      0%   { opacity: 1; transform: translateY(0) scale(1); }
-      60%  { opacity: 1; transform: translateY(-60px) scale(1.2); }
-      100% { opacity: 0; transform: translateY(-120px) scale(0.8); }
+      0%   { opacity:1; transform:translateY(0) scale(1); }
+      60%  { opacity:1; transform:translateY(-60px) scale(1.2); }
+      100% { opacity:0; transform:translateY(-120px) scale(0.8); }
     }
   </style>
 </head>
@@ -108,102 +107,97 @@
   <div id="score">🎣 0点</div>
   <div id="timer">60秒</div>
 </div>
-
 <canvas id="c"></canvas>
-<div id="msg">画面をタップして釣り糸を垂らそう！</div>
+<div id="msg">押しながら左右で狙いを定め、離してキャスト！</div>
 
 <div id="overlay">
   <h1>🎣 釣りゲーム</h1>
-  <div class="sub">タップして釣って高得点を目指せ！</div>
-  <div class="sub" style="font-size:14px; color:#ccc; margin-bottom:20px;">
-    魚 → +点　藻・ゴミ → マイナス点
-  </div>
+  <div class="sub">魚を狙って高得点を目指せ！</div>
+  <div class="hint">📌 画面を押したまま左右にずらして狙いを定める</div>
+  <div class="hint">📌 指を離すとキャスト</div>
+  <div class="hint">📌 食いついたらすぐタップして引き上げ！</div>
+  <div class="hint" style="color:#f88">📌 藻やゴミはマイナス点なので避けよう</div>
   <button id="startBtn">スタート！</button>
 </div>
 
 <script>
 const canvas = document.getElementById('c');
-const ctx = canvas.getContext('2d');
+const ctx    = canvas.getContext('2d');
 const scoreEl = document.getElementById('score');
 const timerEl = document.getElementById('timer');
-const msgEl = document.getElementById('msg');
+const msgEl   = document.getElementById('msg');
 const overlay = document.getElementById('overlay');
 const startBtn = document.getElementById('startBtn');
 
 let W, H;
-function resize() {
-  W = canvas.width  = window.innerWidth;
-  H = canvas.height = window.innerHeight;
-}
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
 resize();
 window.addEventListener('resize', resize);
 
-// ゲーム状態
-let state = 'idle'; // idle | casting | waiting | reeling | result
-let score = 0;
-let timeLeft = 60;
-let timerInterval;
+// --- 定数 ---
+const ROD_X_R = 0.15, ROD_Y_R = 0.28;
+const CATCH_RADIUS = 90; // この半径内の生き物が釣れる
 
-// 釣り竿・ライン
-const ROD_X_RATIO = 0.15;
-const ROD_Y_RATIO = 0.28;
-let hookX, hookY;
-let hookTargetY;
-let lineAnimT = 0;
+// --- 状態 ---
+// idle → aiming → casting → waiting → bite → reeling → idle
+let state = 'idle';
+let score = 0, timeLeft = 60;
+let timerInterval, raf, lastTime = 0;
 
-// 魚たち（水中を泳ぐ）
-const FISH_TYPES = [
-  { emoji: '🐟', name: 'アジ',     pts: 10, weight: 5  },
-  { emoji: '🐠', name: 'タイ',     pts: 20, weight: 3  },
-  { emoji: '🦈', name: 'フグ',     pts: 40, weight: 1  },
-  { emoji: '🐡', name: 'マグロ',   pts: 50, weight: 1  },
-  { emoji: '🦑', name: 'イカ',     pts: 15, weight: 4  },
-  { emoji: '🦐', name: 'エビ',     pts: 5,  weight: 6  },
-  { emoji: '🌿', name: '藻',       pts: -5, weight: 5  },
-  { emoji: '🥾', name: '長靴',     pts:-15, weight: 3  },
-  { emoji: '🛢️', name: 'ドラム缶', pts:-20, weight: 2  },
-  { emoji: '🧦', name: '靴下',     pts:-10, weight: 4  },
-  { emoji: '🛒', name: 'カート',   pts:-25, weight: 1  },
+// 照準・フック
+let aimX = 0;
+let hookX = 0, hookY = 0;
+let castTargetX = 0, castTargetY = 0;
+let lineT = 0;
+let caughtItem = null, reelingT = 0;
+let biteTimer = null;
+
+// --- 生き物データ ---
+const ITEMS = [
+  { emoji:'🐟', name:'アジ',     pts: 10, speed:1.0, size:30, trash:false },
+  { emoji:'🐠', name:'タイ',     pts: 20, speed:0.8, size:32, trash:false },
+  { emoji:'🐡', name:'フグ',     pts: 30, speed:0.6, size:34, trash:false },
+  { emoji:'🦑', name:'イカ',     pts: 15, speed:1.2, size:30, trash:false },
+  { emoji:'🦐', name:'エビ',     pts:  5, speed:1.5, size:24, trash:false },
+  { emoji:'🐙', name:'タコ',     pts: 25, speed:0.5, size:34, trash:false },
+  { emoji:'🌿', name:'藻',       pts: -5, speed:0.3, size:28, trash:true  },
+  { emoji:'🥾', name:'長靴',     pts:-15, speed:0.4, size:30, trash:true  },
+  { emoji:'🛢️', name:'ドラム缶', pts:-20, speed:0.2, size:32, trash:true  },
+  { emoji:'🧦', name:'靴下',     pts:-10, speed:0.5, size:26, trash:true  },
+  { emoji:'🛒', name:'カート',   pts:-25, speed:0.3, size:34, trash:true  },
 ];
 
-let fishEntities = [];
-function spawnFish() {
-  const count = 8;
-  fishEntities = [];
-  for (let i = 0; i < count; i++) {
-    const type = weightedRandom(FISH_TYPES);
-    fishEntities.push({
-      type,
-      x: Math.random() * W,
-      y: H * 0.55 + Math.random() * H * 0.35,
-      vx: (Math.random() - 0.5) * 1.2,
-      flip: false,
-      size: 28 + Math.random() * 16,
-    });
-  }
+let entities = [];
+
+function spawnEntities() {
+  entities = [];
+  const fishCount = 7, trashCount = 4;
+  const fishTypes  = ITEMS.filter(i => !i.trash);
+  const trashTypes = ITEMS.filter(i =>  i.trash);
+  for (let i = 0; i < fishCount; i++)  addEntity(fishTypes [Math.floor(Math.random()*fishTypes.length)]);
+  for (let i = 0; i < trashCount; i++) addEntity(trashTypes[Math.floor(Math.random()*trashTypes.length)]);
 }
 
-function weightedRandom(arr) {
-  const total = arr.reduce((s, t) => s + t.weight, 0);
-  let r = Math.random() * total;
-  for (const t of arr) { r -= t.weight; if (r <= 0) return t; }
-  return arr[arr.length - 1];
+function addEntity(type) {
+  const dir = Math.random() > 0.5 ? 1 : -1;
+  entities.push({
+    type,
+    x: Math.random() * W,
+    y: waterY() + 30 + Math.random() * (H - waterY() - 60),
+    vx: dir * (0.3 + Math.random() * 0.8) * type.speed,
+    vy: (Math.random() - 0.5) * 0.3,
+    baseY: 0,
+  });
+  entities[entities.length-1].baseY = entities[entities.length-1].y;
 }
 
-// 釣れたもの
-let caughtItem = null;
-let caughtAnim = 0; // 0→1 引き上げアニメ
+function rodX()   { return W * ROD_X_R; }
+function rodY()   { return H * ROD_Y_R; }
+function tipX()   { return rodX() + 40; }
+function tipY()   { return rodY() - 40; }
+function waterY() { return H * 0.47; }
 
-// 待機中のニョロニョロアニメ
-let waitT = 0;
-
-function rodX() { return W * ROD_X_RATIO; }
-function rodY() { return H * ROD_Y_RATIO; }
-function waterY() { return H * 0.48; }
-
-// メインループ
-let raf;
-let lastTime = 0;
+// --- メインループ ---
 function loop(ts) {
   raf = requestAnimationFrame(loop);
   const dt = Math.min((ts - lastTime) / 1000, 0.05);
@@ -213,299 +207,319 @@ function loop(ts) {
 }
 
 function update(dt) {
-  // 魚を動かす
-  for (const f of fishEntities) {
-    f.x += f.vx;
-    if (f.x < -40) { f.x = W + 40; f.vx = Math.abs(f.vx) * (Math.random() > 0.5 ? 1 : -1); }
-    if (f.x > W + 40) { f.x = -40; }
-    f.flip = f.vx < 0;
+  // 生き物を動かす
+  for (const e of entities) {
+    e.x += e.vx;
+    e.y += e.vy;
+    if (e.x < -50) { e.x = W + 50; }
+    if (e.x > W + 50) { e.x = -50; }
+    // 上下ふらつき
+    e.y += Math.sin(Date.now()/700 + e.x) * 0.3;
+    e.y = Math.max(waterY() + 15, Math.min(H - 20, e.y));
   }
 
   if (state === 'casting') {
-    lineAnimT = Math.min(lineAnimT + dt * 2.5, 1);
-    hookY = rodY() + (hookTargetY - rodY()) * ease(lineAnimT);
-    hookX = rodX() + (W * 0.5 - rodX()) * ease(lineAnimT);
-    if (lineAnimT >= 1) { state = 'waiting'; waitT = 0; }
-  }
-
-  if (state === 'waiting') {
-    waitT += dt;
-    // 自動でヒット
-    if (waitT > 1.5 + Math.random() * 0.01) {
-      // このタイミングは update が1回しか呼ばれないので randHit 管理
-    }
+    lineT = Math.min(lineT + dt * 2.8, 1);
+    hookX = tipX() + (castTargetX - tipX()) * ease(lineT);
+    hookY = tipY() + (castTargetY - tipY()) * ease(lineT);
+    if (lineT >= 1) { state = 'waiting'; scheduleBite(); }
   }
 
   if (state === 'reeling') {
-    caughtAnim = Math.min(caughtAnim + dt * 1.8, 1);
-    hookY = hookTargetY + (rodY() - hookTargetY) * ease(caughtAnim);
-    hookX = W * 0.5 + (rodX() - W * 0.5) * ease(caughtAnim);
-    if (caughtAnim >= 1) {
-      // 釣果確定
+    reelingT = Math.min(reelingT + dt * 1.8, 1);
+    hookX = castTargetX + (tipX() - castTargetX) * ease(reelingT);
+    hookY = castTargetY + (tipY() - castTargetY) * ease(reelingT);
+    if (reelingT >= 1) {
       const pts = caughtItem ? caughtItem.pts : 0;
       score += pts;
       scoreEl.textContent = `🎣 ${score}点`;
       showPopup(caughtItem, pts);
-      state = 'idle';
       caughtItem = null;
-      setMsg('またタップして釣ろう！');
+      state = 'idle';
+      setMsg('押しながら左右で狙いを定め、離してキャスト！');
     }
   }
 }
 
 function ease(t) { return t < 0.5 ? 2*t*t : -1+(4-2*t)*t; }
 
-// ヒット判定（waitingで一定時間後）
-let hitScheduled = false;
-function scheduleHit() {
-  hitScheduled = true;
-  const delay = 1500 + Math.random() * 2000;
-  setTimeout(() => {
-    if (state !== 'waiting') { hitScheduled = false; return; }
-    // 近くの魚を釣る or ランダム
-    const candidates = fishEntities.filter(f => Math.abs(f.x - hookX) < 120 && Math.abs(f.y - hookY) < 80);
-    if (candidates.length > 0) {
-      caughtItem = candidates[Math.floor(Math.random() * candidates.length)].type;
-    } else {
-      caughtItem = weightedRandom(FISH_TYPES);
+// --- ヒット判定 ---
+function scheduleBite() {
+  // フックに最も近い生き物を探す（距離ベース）
+  // 少し待ってから判定（魚が近づいてくるのを演出）
+  const delay = 1200 + Math.random() * 1500;
+  biteTimer = setTimeout(() => {
+    if (state !== 'waiting') return;
+
+    // 現時点でフックに最も近い生き物
+    let nearest = null, minDist = Infinity;
+    for (const e of entities) {
+      const d = Math.hypot(e.x - hookX, e.y - hookY);
+      if (d < minDist) { minDist = d; nearest = e; }
     }
-    // 餌に食いついたアニメ→引き上げ
-    setMsg(`${caughtItem.emoji} ${caughtItem.name}が釣れた！タップして引き上げ！`);
-    state = 'bite';
-    hitScheduled = false;
-    startBiteAnim();
+
+    if (nearest && minDist < CATCH_RADIUS) {
+      // 狙い通り近くにいる → 釣れる
+      caughtItem = nearest.type;
+    } else if (nearest && minDist < CATCH_RADIUS * 2.5) {
+      // 少し遠いが範囲内 → 低確率で釣れる
+      caughtItem = Math.random() < 0.4 ? nearest.type : null;
+    } else {
+      // 何もいない → 空振り
+      caughtItem = null;
+    }
+
+    if (caughtItem) {
+      setMsg(`${caughtItem.emoji} ${caughtItem.name}が食いついた！今すぐタップ！`);
+      state = 'bite';
+      // 一定時間内にタップしないと逃げる
+      biteTimer = setTimeout(() => {
+        if (state !== 'bite') return;
+        caughtItem = null;
+        state = 'idle';
+        setMsg('逃げられた！もう一度！');
+      }, 1800);
+    } else {
+      setMsg('空振り…もう一度！');
+      state = 'idle';
+    }
   }, delay);
 }
 
-let biteT = 0;
-function startBiteAnim() {
-  biteT = 0;
-  const iv = setInterval(() => {
-    if (state !== 'bite') { clearInterval(iv); return; }
-    biteT += 0.1;
-    if (biteT > 1.5) {
-      // 逃げた
-      caughtItem = null;
-      state = 'idle';
-      setMsg('逃げられた！もう一度タップ！');
-      clearInterval(iv);
-    }
-  }, 100);
-}
-
-// 描画
+// --- 描画 ---
 function draw() {
   ctx.clearRect(0, 0, W, H);
 
   // 空
-  const skyGrad = ctx.createLinearGradient(0, 0, 0, waterY());
-  skyGrad.addColorStop(0, '#87ceeb');
-  skyGrad.addColorStop(1, '#c9e8f5');
-  ctx.fillStyle = skyGrad;
-  ctx.fillRect(0, 0, W, waterY());
+  const sky = ctx.createLinearGradient(0, 0, 0, waterY());
+  sky.addColorStop(0, '#5bc0eb');
+  sky.addColorStop(1, '#c9e8f5');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, waterY());
 
-  // 雲
-  drawCloud(W*0.2, H*0.08, 60);
-  drawCloud(W*0.65, H*0.12, 45);
+  drawCloud(W*0.2, H*0.07, 55);
+  drawCloud(W*0.68, H*0.11, 42);
 
-  // 水面
-  const waterGrad = ctx.createLinearGradient(0, waterY(), 0, H);
-  waterGrad.addColorStop(0, '#1a8fc1');
-  waterGrad.addColorStop(1, '#0a4a72');
-  ctx.fillStyle = waterGrad;
-  ctx.fillRect(0, waterY(), W, H - waterY());
+  // 海
+  const sea = ctx.createLinearGradient(0, waterY(), 0, H);
+  sea.addColorStop(0, '#1a8fc1');
+  sea.addColorStop(1, '#083d5e');
+  ctx.fillStyle = sea; ctx.fillRect(0, waterY(), W, H - waterY());
 
-  // 水面ラメ
-  ctx.save();
-  ctx.globalAlpha = 0.12;
+  // 水面きらめき
+  ctx.save(); ctx.globalAlpha = 0.1;
   for (let i = 0; i < 6; i++) {
-    const wx = (W * (i / 5)) + Math.sin(Date.now()/900 + i) * 20;
-    ctx.fillStyle = 'white';
-    ctx.fillRect(wx, waterY() + 4, 40, 3);
+    const wx = W*(i/5) + Math.sin(Date.now()/900+i)*18;
+    ctx.fillStyle = 'white'; ctx.fillRect(wx, waterY()+4, 36, 3);
   }
   ctx.restore();
 
-  // 魚
-  for (const f of fishEntities) {
-    if (f.y < waterY()) continue;
+  // 生き物（水中）
+  for (const e of entities) {
     ctx.save();
-    ctx.font = `${f.size}px serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    if (f.flip) {
-      ctx.translate(f.x, f.y);
-      ctx.scale(-1, 1);
-      ctx.fillText(f.type.emoji, 0, 0);
-    } else {
-      ctx.fillText(f.type.emoji, f.x, f.y);
+    ctx.font = `${e.type.size}px serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    if (e.vx < 0) { ctx.translate(e.x, e.y); ctx.scale(-1,1); ctx.fillText(e.type.emoji, 0, 0); }
+    else           { ctx.fillText(e.type.emoji, e.x, e.y); }
+    ctx.restore();
+  }
+
+  // 照準ライン（aiming中）
+  if (state === 'aiming') {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,230,0,0.7)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 6]);
+    ctx.beginPath();
+    ctx.moveTo(aimX, tipY());
+    ctx.lineTo(aimX, H);
+    ctx.stroke();
+    // 照準マーク
+    ctx.setLineDash([]);
+    ctx.strokeStyle = '#ffe066';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(aimX, waterY() + 40, 22, 0, Math.PI*2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(aimX - 30, waterY() + 40); ctx.lineTo(aimX + 30, waterY() + 40);
+    ctx.moveTo(aimX, waterY() + 10);      ctx.lineTo(aimX, waterY() + 70);
+    ctx.stroke();
+
+    // aimX付近にいる生き物をハイライト
+    for (const e of entities) {
+      const d = Math.hypot(e.x - aimX, e.y - (waterY() + 40));
+      if (d < CATCH_RADIUS * 1.5) {
+        ctx.save();
+        ctx.globalAlpha = 0.3;
+        ctx.fillStyle = e.type.trash ? '#ff4444' : '#44ff88';
+        ctx.beginPath();
+        ctx.arc(e.x, e.y, 26, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
     ctx.restore();
   }
 
-  // 釣り竿
-  const rx = rodX(), ry = rodY();
-  ctx.save();
-  ctx.strokeStyle = '#6b3a1f';
-  ctx.lineWidth = 5;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(rx - 30, ry + 60);
-  ctx.quadraticCurveTo(rx, ry + 20, rx + 40, ry - 40);
-  ctx.stroke();
-
-  // 釣り糸
-  if (state !== 'idle') {
-    ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+  // 釣り糸・浮き・フック
+  if (state !== 'idle' && state !== 'aiming') {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
     ctx.lineWidth = 1.5;
     ctx.setLineDash([]);
     ctx.beginPath();
-    ctx.moveTo(rx + 40, ry - 40);
+    ctx.moveTo(tipX(), tipY());
     if (state === 'waiting' || state === 'bite') {
-      // ゆらゆら
-      const sway = Math.sin(Date.now()/300) * 6;
-      ctx.quadraticCurveTo(hookX + sway, (ry - 40 + hookY) / 2, hookX, hookY);
+      const sway = Math.sin(Date.now()/280) * 5;
+      ctx.quadraticCurveTo(hookX + sway, (tipY()+hookY)/2 - 10, hookX, hookY);
     } else {
-      ctx.quadraticCurveTo((rx + 40 + hookX) / 2, (ry - 40 + hookY) / 2 - 20, hookX, hookY);
+      ctx.quadraticCurveTo((tipX()+hookX)/2, (tipY()+hookY)/2 - 20, hookX, hookY);
     }
     ctx.stroke();
 
-    // 針/浮き
-    if (state === 'waiting' || state === 'bite') {
-      // 浮き
-      const bobY = hookY + Math.sin(Date.now()/400) * 3 + (state === 'bite' ? Math.sin(Date.now()/100)*5 : 0);
-      ctx.beginPath();
-      ctx.ellipse(hookX, bobY, 6, 14, 0, 0, Math.PI * 2);
-      ctx.fillStyle = '#e63946';
-      ctx.fill();
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 1;
-      ctx.stroke();
-    } else {
-      // 針
-      ctx.beginPath();
-      ctx.arc(hookX, hookY, 5, 0, Math.PI * 2);
-      ctx.fillStyle = '#ccc';
-      ctx.fill();
+    // キャッチ圏（waiting中）
+    if (state === 'waiting') {
+      ctx.save();
+      ctx.globalAlpha = 0.15;
+      ctx.fillStyle = '#00ffcc';
+      ctx.beginPath(); ctx.arc(hookX, hookY, CATCH_RADIUS, 0, Math.PI*2); ctx.fill();
+      ctx.globalAlpha = 0.4;
+      ctx.strokeStyle = '#00ffcc';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6,4]);
+      ctx.beginPath(); ctx.arc(hookX, hookY, CATCH_RADIUS, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
     }
 
-    // 釣れたもの
-    if ((state === 'reeling' || state === 'bite') && caughtItem) {
-      ctx.font = '30px serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(caughtItem.emoji, hookX, hookY + (state === 'reeling' ? -5 : 5));
+    // 浮き or 針
+    if (state === 'waiting' || state === 'bite') {
+      const bob = hookY + Math.sin(Date.now()/400)*3 + (state==='bite' ? Math.sin(Date.now()/80)*7 : 0);
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.ellipse(hookX, bob, 6, 14, 0, 0, Math.PI*2);
+      ctx.fillStyle = state === 'bite' ? '#ff6b00' : '#e63946'; ctx.fill();
+      ctx.strokeStyle = 'white'; ctx.lineWidth = 1; ctx.stroke();
+    } else {
+      ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(hookX, hookY, 5, 0, Math.PI*2);
+      ctx.fillStyle = '#ccc'; ctx.fill();
     }
+
+    // 釣れたもの（bite / reeling）
+    if (caughtItem && (state === 'bite' || state === 'reeling')) {
+      ctx.font = '28px serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(caughtItem.emoji, hookX, hookY + (state==='reeling' ? -8 : 6));
+    }
+    ctx.restore();
   }
 
-  // 釣り人シルエット
-  drawFisher(rx, ry);
+  // 竿
+  const rx = rodX(), ry = rodY();
+  ctx.save();
+  ctx.strokeStyle = '#6b3a1f'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(rx - 30, ry + 60);
+  ctx.quadraticCurveTo(rx, ry + 20, tipX(), tipY());
+  ctx.stroke();
   ctx.restore();
+
+  // 釣り人
+  drawFisher(rx, ry);
 }
 
 function drawCloud(x, y, r) {
-  ctx.save();
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.save(); ctx.fillStyle = 'rgba(255,255,255,0.85)';
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI*2);
-  ctx.arc(x + r*0.6, y - r*0.2, r*0.7, 0, Math.PI*2);
-  ctx.arc(x - r*0.5, y + r*0.1, r*0.6, 0, Math.PI*2);
-  ctx.fill();
-  ctx.restore();
+  ctx.arc(x+r*0.6, y-r*0.2, r*0.7, 0, Math.PI*2);
+  ctx.arc(x-r*0.5, y+r*0.1, r*0.6, 0, Math.PI*2);
+  ctx.fill(); ctx.restore();
 }
 
 function drawFisher(rx, ry) {
-  // 胴体
-  ctx.fillStyle = '#3a3a5c';
-  ctx.fillRect(rx - 48, ry + 20, 24, 36);
-  // 頭
-  ctx.beginPath();
-  ctx.arc(rx - 36, ry + 14, 14, 0, Math.PI*2);
-  ctx.fillStyle = '#f4a261';
-  ctx.fill();
-  // 帽子
+  ctx.save();
+  ctx.fillStyle = '#3a3a5c'; ctx.fillRect(rx-48, ry+20, 24, 36);
+  ctx.beginPath(); ctx.arc(rx-36, ry+14, 14, 0, Math.PI*2);
+  ctx.fillStyle = '#f4a261'; ctx.fill();
   ctx.fillStyle = '#2d6a4f';
-  ctx.fillRect(rx - 52, ry + 2, 32, 6);
-  ctx.fillRect(rx - 47, ry - 12, 22, 16);
-  // 脚
+  ctx.fillRect(rx-52, ry+2, 32, 6);
+  ctx.fillRect(rx-47, ry-12, 22, 16);
   ctx.fillStyle = '#1a1a2e';
-  ctx.fillRect(rx - 48, ry + 55, 10, 20);
-  ctx.fillRect(rx - 35, ry + 55, 10, 20);
+  ctx.fillRect(rx-48, ry+55, 10, 20);
+  ctx.fillRect(rx-35, ry+55, 10, 20);
+  ctx.restore();
 }
 
-function setMsg(txt) {
-  msgEl.textContent = txt;
-  msgEl.style.opacity = 1;
-}
+function setMsg(txt) { msgEl.textContent = txt; }
 
 function showPopup(item, pts) {
-  if (!item) return;
   const div = document.createElement('div');
-  div.className = 'catch-popup';
+  div.className = 'popup';
   const sign = pts >= 0 ? '+' : '';
   div.style.color = pts >= 0 ? '#ffe066' : '#ff6b6b';
-  div.textContent = `${item.emoji} ${sign}${pts}点`;
-  div.style.left = (W / 2 - 60) + 'px';
-  div.style.top = (H * 0.4) + 'px';
+  div.textContent = item ? `${item.emoji} ${sign}${pts}点` : '空振り…';
+  div.style.left = (W/2 - 50) + 'px';
+  div.style.top  = (H * 0.38) + 'px';
   document.body.appendChild(div);
   setTimeout(() => div.remove(), 1300);
 }
 
-// タップ処理
-function onTap() {
+// --- タッチ操作 ---
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
   if (state === 'idle') {
-    state = 'casting';
-    lineAnimT = 0;
-    hookX = rodX() + 40;
-    hookY = rodY() - 40;
-    hookTargetY = waterY() + H * 0.08 + Math.random() * H * 0.1;
-    setMsg('釣り糸を垂らし中...');
-  } else if (state === 'waiting') {
-    // 逃げた
-    setMsg('まだ食いついてない！');
+    state = 'aiming';
+    aimX = e.clientX;
+    setMsg('左右にずらして狙いを定めよう…');
   } else if (state === 'bite') {
     // 引き上げ！
+    clearTimeout(biteTimer);
+    castTargetX = hookX; castTargetY = hookY;
     state = 'reeling';
-    caughtAnim = 0;
-    hookTargetY = hookY;
-    setMsg('引き上げ中...');
-  } else if (state === 'reeling') {
-    // 連打OK（もう少し早める）
+    reelingT = 0;
+    setMsg('引き上げ中…！');
   }
-}
+}, { passive: false });
 
-// waiting に入ったらヒットスケジュール
-let prevState = '';
-function update2() {
-  if (state === 'waiting' && prevState !== 'waiting' && !hitScheduled) {
-    scheduleHit();
+canvas.addEventListener('pointermove', e => {
+  e.preventDefault();
+  if (state === 'aiming') {
+    aimX = Math.max(10, Math.min(W - 10, e.clientX));
   }
-  prevState = state;
-}
-setInterval(update2, 50);
+}, { passive: false });
 
-canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); onTap(); });
+canvas.addEventListener('pointerup', e => {
+  e.preventDefault();
+  if (state === 'aiming') {
+    // キャスト！
+    castTargetX = aimX;
+    castTargetY = waterY() + 30 + Math.random() * (H * 0.25);
+    hookX = tipX(); hookY = tipY();
+    lineT = 0;
+    state = 'casting';
+    setMsg('キャスト中…');
+  }
+}, { passive: false });
 
-// ゲーム開始
+// --- ゲーム制御 ---
 function startGame() {
-  score = 0;
-  timeLeft = 60;
+  score = 0; timeLeft = 60;
   state = 'idle';
   caughtItem = null;
+  clearTimeout(biteTimer);
   scoreEl.textContent = '🎣 0点';
   timerEl.textContent = '60秒';
-  setMsg('画面をタップして釣り糸を垂らそう！');
+  timerEl.style.color = '#ffe066';
+  setMsg('押しながら左右で狙いを定め、離してキャスト！');
   overlay.style.display = 'none';
-  spawnFish();
+  spawnEntities();
 
   clearInterval(timerInterval);
   timerInterval = setInterval(() => {
     timeLeft--;
     timerEl.textContent = `${timeLeft}秒`;
-    if (timeLeft <= 10) timerEl.style.color = '#ff6b6b';
-    if (timeLeft <= 0) {
-      clearInterval(timerInterval);
-      endGame();
-    }
+    if (timeLeft <= 10) timerEl.style.color = '#ff4444';
+    if (timeLeft <= 0) { clearInterval(timerInterval); endGame(); }
   }, 1000);
 
   if (!raf) { lastTime = performance.now(); loop(lastTime); }
@@ -513,7 +527,12 @@ function startGame() {
 
 function endGame() {
   state = 'result';
-  const rank = score >= 200 ? '🏆 名人！' : score >= 100 ? '🥈 上級者' : score >= 50 ? '🥉 中級者' : score >= 0 ? '😊 初心者' : '😢 ゴミ拾い師';
+  clearTimeout(biteTimer);
+  const rank = score >= 250 ? '🏆 釣り名人！'
+             : score >= 150 ? '🥈 上級アングラー'
+             : score >= 80  ? '🥉 中級者'
+             : score >= 0   ? '😊 見習い'
+             :                '😢 ゴミ収集家';
   overlay.innerHTML = `
     <h1>🎣 結果発表</h1>
     <div class="final">${score}点</div>

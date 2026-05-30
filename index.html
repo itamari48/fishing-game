@@ -222,7 +222,7 @@ function update(dt) {
     lineT = Math.min(lineT + dt * 2.8, 1);
     hookX = tipX() + (castTargetX - tipX()) * ease(lineT);
     hookY = tipY() + (castTargetY - tipY()) * ease(lineT);
-    if (lineT >= 1) { state = 'waiting'; scheduleBite(); }
+    if (lineT >= 1) { state = 'waiting'; playSound('splash'); scheduleBite(); }
   }
 
   if (state === 'reeling') {
@@ -233,6 +233,7 @@ function update(dt) {
       const pts = caughtItem ? caughtItem.pts : 0;
       score += pts;
       scoreEl.textContent = `🎣 ${score}点`;
+      playSound(pts >= 0 ? 'catch_good' : 'catch_bad');
       showPopup(caughtItem, pts);
       caughtItem = null;
       state = 'idle';
@@ -270,6 +271,7 @@ function scheduleBite() {
     }
 
     if (caughtItem) {
+      playSound('bite');
       setMsg(`${caughtItem.emoji} ${caughtItem.name}が食いついた！今すぐタップ！`);
       state = 'bite';
       // 一定時間内にタップしないと逃げる
@@ -280,6 +282,7 @@ function scheduleBite() {
         setMsg('逃げられた！もう一度！');
       }, 1800);
     } else {
+      playSound('miss');
       setMsg('空振り…もう一度！');
       state = 'idle';
     }
@@ -464,6 +467,115 @@ function showPopup(item, pts) {
   setTimeout(() => div.remove(), 1300);
 }
 
+// --- 効果音 (Web Audio API) ---
+let audioCtx = null;
+function getAudio() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  return audioCtx;
+}
+
+function playSound(type) {
+  try {
+    const ac = getAudio();
+    if (ac.state === 'suspended') ac.resume();
+
+    if (type === 'cast') {
+      // シュッ！（キャスト音）
+      const buf = ac.createBuffer(1, ac.sampleRate * 0.3, ac.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/d.length, 2);
+      const src = ac.createBufferSource();
+      const filt = ac.createBiquadFilter();
+      filt.type = 'highpass'; filt.frequency.value = 800;
+      src.buffer = buf;
+      src.connect(filt); filt.connect(ac.destination);
+      src.start();
+
+    } else if (type === 'splash') {
+      // ポチャン（着水音）
+      const buf = ac.createBuffer(1, ac.sampleRate * 0.4, ac.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/d.length, 3) * 0.8;
+      const src = ac.createBufferSource();
+      const filt = ac.createBiquadFilter();
+      filt.type = 'lowpass'; filt.frequency.value = 600;
+      const gain = ac.createGain();
+      gain.gain.setValueAtTime(1, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.4);
+      src.buffer = buf;
+      src.connect(filt); filt.connect(gain); gain.connect(ac.destination);
+      src.start();
+
+    } else if (type === 'bite') {
+      // ビクッ！（食いついた音）ピコン
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(600, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1000, ac.currentTime + 0.08);
+      osc.frequency.exponentialRampToValueAtTime(700, ac.currentTime + 0.18);
+      gain.gain.setValueAtTime(0.4, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.3);
+      osc.connect(gain); gain.connect(ac.destination);
+      osc.start(); osc.stop(ac.currentTime + 0.3);
+
+    } else if (type === 'catch_good') {
+      // やったー！（魚ゲット）上昇音
+      [440, 550, 660, 880].forEach((freq, i) => {
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = freq;
+        const t = ac.currentTime + i * 0.09;
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.35, t + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.18);
+        osc.connect(gain); gain.connect(ac.destination);
+        osc.start(t); osc.stop(t + 0.2);
+      });
+
+    } else if (type === 'catch_bad') {
+      // ガーン（ゴミ）下降音
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(400, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(120, ac.currentTime + 0.4);
+      gain.gain.setValueAtTime(0.25, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.5);
+      osc.connect(gain); gain.connect(ac.destination);
+      osc.start(); osc.stop(ac.currentTime + 0.5);
+
+    } else if (type === 'reel') {
+      // ジーッ（リール音）
+      const buf = ac.createBuffer(1, ac.sampleRate * 0.5, ac.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) {
+        d[i] = Math.sin(i * 0.3) * (Math.random()*0.1) * Math.pow(1 - i/d.length, 0.5);
+      }
+      const src = ac.createBufferSource();
+      const gain = ac.createGain();
+      gain.gain.setValueAtTime(0.3, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.5);
+      src.buffer = buf;
+      src.connect(gain); gain.connect(ac.destination);
+      src.start();
+
+    } else if (type === 'miss') {
+      // ポコン（空振り）
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(300, ac.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(180, ac.currentTime + 0.2);
+      gain.gain.setValueAtTime(0.3, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.25);
+      osc.connect(gain); gain.connect(ac.destination);
+      osc.start(); osc.stop(ac.currentTime + 0.25);
+    }
+  } catch(e) { /* 音声非対応環境は無視 */ }
+}
+
 // --- タッチ操作 ---
 canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
@@ -477,6 +589,7 @@ canvas.addEventListener('pointerdown', e => {
     castTargetX = hookX; castTargetY = hookY;
     state = 'reeling';
     reelingT = 0;
+    playSound('reel');
     setMsg('引き上げ中…！');
   }
 }, { passive: false });
@@ -497,6 +610,7 @@ canvas.addEventListener('pointerup', e => {
     hookX = tipX(); hookY = tipY();
     lineT = 0;
     state = 'casting';
+    playSound('cast');
     setMsg('キャスト中…');
   }
 }, { passive: false });

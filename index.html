@@ -473,6 +473,13 @@ function getAudio() {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   return audioCtx;
 }
+// タッチのたびに AudioContext を起こしておく（タイマー終了時に確実に音が出るよう）
+function ensureAudio() {
+  try {
+    const ac = getAudio();
+    if (ac.state === 'suspended') ac.resume();
+  } catch(e) {}
+}
 
 function playSound(type) {
   try {
@@ -579,6 +586,7 @@ function playSound(type) {
 // --- タッチ操作 ---
 canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
+  ensureAudio(); // ユーザー操作のたびに AudioContext を確実に起動
   if (state === 'idle') {
     state = 'aiming';
     aimX = e.clientX;
@@ -639,10 +647,10 @@ function startGame() {
   if (!raf) { lastTime = performance.now(); loop(lastTime); }
 }
 
-function playEndJingle(score) {
+async function playEndJingle(score) {
   try {
     const ac = getAudio();
-    if (ac.state === 'suspended') ac.resume();
+    if (ac.state === 'suspended') await ac.resume();
 
     if (score >= 250) {
       // 🏆 名人：明るくファンファーレ

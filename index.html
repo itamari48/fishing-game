@@ -647,78 +647,51 @@ function startGame() {
   if (!raf) { lastTime = performance.now(); loop(lastTime); }
 }
 
-async function playEndJingle(score) {
-  try {
-    const ac = getAudio();
-    if (ac.state === 'suspended') await ac.resume();
+function playEndJingle(finalScore) {
+  const ac = getAudio();
+  const doPlay = () => {
+    const now = ac.currentTime;
 
-    if (score >= 250) {
-      // 🏆 名人：明るくファンファーレ
-      const melody = [523, 659, 784, 1047, 784, 1047];
-      const times  = [0, 0.13, 0.26, 0.39, 0.55, 0.65];
-      melody.forEach((freq, i) => {
-        const osc = ac.createOscillator();
-        const gain = ac.createGain();
-        osc.type = 'triangle';
-        osc.frequency.value = freq;
-        const t = ac.currentTime + times[i];
-        gain.gain.setValueAtTime(0, t);
-        gain.gain.linearRampToValueAtTime(0.4, t + 0.04);
-        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.22);
-        osc.connect(gain); gain.connect(ac.destination);
-        osc.start(t); osc.stop(t + 0.25);
-      });
-    } else if (score >= 150) {
-      // 🥈 上級：元気な上昇音
-      const melody = [440, 550, 660, 770];
-      melody.forEach((freq, i) => {
-        const osc = ac.createOscillator();
-        const gain = ac.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = freq;
-        const t = ac.currentTime + i * 0.14;
-        gain.gain.setValueAtTime(0.35, t);
-        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
-        osc.connect(gain); gain.connect(ac.destination);
-        osc.start(t); osc.stop(t + 0.22);
-      });
-    } else if (score >= 80) {
-      // 🥉 中級：ほんわか2音
-      [440, 523].forEach((freq, i) => {
-        const osc = ac.createOscillator();
-        const gain = ac.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = freq;
-        const t = ac.currentTime + i * 0.22;
-        gain.gain.setValueAtTime(0.3, t);
-        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.3);
-        osc.connect(gain); gain.connect(ac.destination);
-        osc.start(t); osc.stop(t + 0.35);
-      });
-    } else if (score >= 0) {
-      // 😊 見習い：短くポコン
-      const osc = ac.createOscillator();
+    // 音符を鳴らすヘルパー
+    function note(freq, startOffset, dur, type, vol) {
+      const osc  = ac.createOscillator();
       const gain = ac.createGain();
-      osc.type = 'sine'; osc.frequency.value = 350;
-      gain.gain.setValueAtTime(0.25, ac.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.4);
+      osc.type = type || 'sine';
+      osc.frequency.value = freq;
+      const t = now + startOffset;
+      gain.gain.setValueAtTime(vol || 0.35, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + dur);
       osc.connect(gain); gain.connect(ac.destination);
-      osc.start(); osc.stop(ac.currentTime + 0.4);
-    } else {
-      // 😢 マイナス：ガーン…ズーン
-      const melody = [300, 220, 160];
-      melody.forEach((freq, i) => {
-        const osc = ac.createOscillator();
-        const gain = ac.createGain();
-        osc.type = 'sawtooth'; osc.frequency.value = freq;
-        const t = ac.currentTime + i * 0.22;
-        gain.gain.setValueAtTime(0.25, t);
-        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.35);
-        osc.connect(gain); gain.connect(ac.destination);
-        osc.start(t); osc.stop(t + 0.38);
-      });
+      osc.start(t); osc.stop(t + dur + 0.05);
     }
-  } catch(e) {}
+
+    if (finalScore >= 250) {
+      // 🏆 名人：ファンファーレ（6音）
+      [[523,0],[659,0.13],[784,0.26],[1047,0.4],[784,0.55],[1047,0.65]].forEach(([f,t]) =>
+        note(f, t, 0.25, 'triangle', 0.4));
+    } else if (finalScore >= 150) {
+      // 🥈 上級：上昇4音
+      [[440,0],[554,0.14],[659,0.28],[880,0.42]].forEach(([f,t]) =>
+        note(f, t, 0.22, 'sine', 0.35));
+    } else if (finalScore >= 80) {
+      // 🥉 中級：2音
+      [[440,0],[523,0.22]].forEach(([f,t]) =>
+        note(f, t, 0.3, 'sine', 0.3));
+    } else if (finalScore >= 0) {
+      // 😊 見習い：1音ポコン
+      note(350, 0, 0.4, 'sine', 0.3);
+    } else {
+      // 😢 ゴミ収集家：下降3音
+      [[300,0],[220,0.22],[150,0.44]].forEach(([f,t]) =>
+        note(f, t, 0.35, 'sawtooth', 0.25));
+    }
+  };
+
+  if (ac.state === 'suspended') {
+    ac.resume().then(doPlay);
+  } else {
+    doPlay();
+  }
 }
 
 function endGame() {

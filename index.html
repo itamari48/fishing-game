@@ -639,9 +639,84 @@ function startGame() {
   if (!raf) { lastTime = performance.now(); loop(lastTime); }
 }
 
+function playEndJingle(score) {
+  try {
+    const ac = getAudio();
+    if (ac.state === 'suspended') ac.resume();
+
+    if (score >= 250) {
+      // 🏆 名人：明るくファンファーレ
+      const melody = [523, 659, 784, 1047, 784, 1047];
+      const times  = [0, 0.13, 0.26, 0.39, 0.55, 0.65];
+      melody.forEach((freq, i) => {
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = freq;
+        const t = ac.currentTime + times[i];
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.4, t + 0.04);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.22);
+        osc.connect(gain); gain.connect(ac.destination);
+        osc.start(t); osc.stop(t + 0.25);
+      });
+    } else if (score >= 150) {
+      // 🥈 上級：元気な上昇音
+      const melody = [440, 550, 660, 770];
+      melody.forEach((freq, i) => {
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        const t = ac.currentTime + i * 0.14;
+        gain.gain.setValueAtTime(0.35, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+        osc.connect(gain); gain.connect(ac.destination);
+        osc.start(t); osc.stop(t + 0.22);
+      });
+    } else if (score >= 80) {
+      // 🥉 中級：ほんわか2音
+      [440, 523].forEach((freq, i) => {
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq;
+        const t = ac.currentTime + i * 0.22;
+        gain.gain.setValueAtTime(0.3, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.3);
+        osc.connect(gain); gain.connect(ac.destination);
+        osc.start(t); osc.stop(t + 0.35);
+      });
+    } else if (score >= 0) {
+      // 😊 見習い：短くポコン
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = 'sine'; osc.frequency.value = 350;
+      gain.gain.setValueAtTime(0.25, ac.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + 0.4);
+      osc.connect(gain); gain.connect(ac.destination);
+      osc.start(); osc.stop(ac.currentTime + 0.4);
+    } else {
+      // 😢 マイナス：ガーン…ズーン
+      const melody = [300, 220, 160];
+      melody.forEach((freq, i) => {
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.type = 'sawtooth'; osc.frequency.value = freq;
+        const t = ac.currentTime + i * 0.22;
+        gain.gain.setValueAtTime(0.25, t);
+        gain.gain.exponentialRampToValueAtTime(0.01, t + 0.35);
+        osc.connect(gain); gain.connect(ac.destination);
+        osc.start(t); osc.stop(t + 0.38);
+      });
+    }
+  } catch(e) {}
+}
+
 function endGame() {
   state = 'result';
   clearTimeout(biteTimer);
+  playEndJingle(score);
   const rank = score >= 250 ? '🏆 釣り名人！'
              : score >= 150 ? '🥈 上級アングラー'
              : score >= 80  ? '🥉 中級者'
